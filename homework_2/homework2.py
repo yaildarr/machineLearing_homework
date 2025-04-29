@@ -1,79 +1,98 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.linear_model import LinearRegression
+from mpl_toolkits.mplot3d import Axes3D
 from sklearn.decomposition import PCA
+from sklearn.linear_model import Lasso
 from sklearn.metrics import mean_squared_error
-
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 
-def main():
-    dataset = pd.read_csv('AmesHousing.csv')
-    dataset = dataset.drop(columns=['Order'])
+def main() :
+    #предобрабботка файлов
+    data = pd.read_csv('AmesHousing.csv')
+    data.drop(["Order", "PID"], axis=1, inplace=True)
+    numeric_data = data.select_dtypes(include='number')
+    corr_matrix = numeric_data.corr()
 
-    numeric_dataset = dataset.select_dtypes(include=['number'])
+    plt.figure(figsize=(20, 16))
+    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm")
+    plt.show()
 
-    correlation_matrix = numeric_dataset.corr()
-    high_corr_columns = []
+    mask = np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)
+    upper_triangle = corr_matrix.where(mask)
+    high_corr_features = {
+        column
+        for column in upper_triangle.columns
+        if any(upper_triangle[column] > 0.79)
+    }
+    numeric_data.drop(columns=high_corr_features, inplace=True)
 
-    for i in range(len(correlation_matrix.columns)):
-        for j in range(i + 1, len(correlation_matrix.columns)):
-            if abs(correlation_matrix.iloc[i, j]) > 0.8:
-                col1 = correlation_matrix.columns[i]
-                col2 = correlation_matrix.columns[j]
-                high_corr_columns.append((col1, col2, correlation_matrix.iloc[i, j]))
+    if "SalePrice" not in numeric_data.columns:
+        numeric_data["SalePrice"] = data["SalePrice"]
 
-    print("Пары столбцов с корреляцией > 0.8:")
-    for pair in high_corr_columns:
-        print(f"Столбцы: {pair[0]} и {pair[1]}, Корреляция: {pair[2]:.2f}")
+    plt.figure(figsize=(20, 16))
+    sns.heatmap(numeric_data.corr(), annot=True, cmap="coolwarm")
+    plt.show()
 
-    first_elements = [pair[0] for pair in high_corr_columns]  # массив столбцов которые нужно убрать
-    normal_dataset = numeric_dataset.drop(columns=first_elements, axis=1)
+    numeric_data = numeric_data.dropna()
 
+    #построение графика
+    X = numeric_data.drop("SalePrice", axis=1)
+    y = numeric_data["SalePrice"]
 
-    # Разделение данных на признаки (X) и целевую переменную (y)
-    X, y = normal_dataset.drop(columns=['SalePrice'], axis=1), normal_dataset['SalePrice']
-
-    X = X.fillna(X.mean())  # Заполнение средним значением
-    y = y.fillna(y.mean())
-
-    # Разбиение данных на обучающую и тестовую выборки
-    X_train, X_test, Y_train, Y_test = train_test_split(X, y, train_size=0.2, random_state=42)
-
-    lr = LinearRegression()
-    lr.fit(X_train, Y_train)
-
-    predict = lr.predict(X_test)
-
-    # Вычисление RMSE
-    rmse = np.sqrt(mean_squared_error(Y_test, predict))
-    print(f"RMSE для линейной регрессии: {rmse:.2f}")
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
     pca = PCA(n_components=2)
-    X_pca = pca.fit_transform(X)
-
+    X_pca = pca.fit_transform(X_scaled)
     fig = plt.figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection='3d')
-    scatter = ax.scatter(
-        X_pca[:, 0],  # Первая главная компонента
-        X_pca[:, 1],  # Вторая главная компонента
-        y,  # Целевая переменная (ось Z)
-        c=y,  # Цвет точек зависит от значения целевой переменной
-        cmap='viridis'
-    )
-
-    ax.set_xlabel('Principal Component 1')
-    ax.set_ylabel('Principal Component 2')
+    ax.scatter(X_pca[:, 0], X_pca[:, 1], y, c=y, cmap='viridis')
+    ax.set_xlabel('PCA 1')
+    ax.set_ylabel('PCA 2')
     ax.set_zlabel('SalePrice')
-    ax.set_title('3D Scatter Plot of PCA-transformed Data')
+    plt.show(block=True)
 
-    cbar = plt.colorbar(scatter, shrink=0.5, aspect=10)
-    cbar.set_label('SalePrice')
+    #Разбейте данные на x_train, y_train, x_test и y_test для оценки точности работы алгоритма.
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y)
 
+    #Посчитайте метрику RMSE.
+    alphas = np.logspace(-4, 1, 30)
+    errors = []
+    for alpha in alphas:
+        model = Lasso(alpha=alpha, max_iter=10000)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        errors.append(rmse)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(alphas, errors, marker='o')
+    plt.xlabel("Коэффициент регуляризации (alpha)")
+    plt.ylabel("RMSE")
+    plt.title("Зависимость ошибки от alpha (Lasso)")
+    plt.grid(True)
+    plt.show()
+
+    best_alpha = alphas[np.argmin(errors)]
+    print(f"Лучшее значение alpha: {best_alpha:.5f}, RMSE: {min(errors):.2f}")
+
+    model = Lasso(alpha=best_alpha)
+    model.fit(X_train, y_train)
+
+    coefficients = pd.Series(model.coef_, index=X.columns)
+    top_features = coefficients.abs().sort_values(ascending=False).head(10)
+
+    print("Топ-10 признаков по влиянию на SalePrice:")
+    print(top_features)
+    top_features.plot(kind='barh', title="Влияние признаков (Lasso)")
+    plt.gca().invert_yaxis()
+    plt.xlabel("Коэффициент")
     plt.show()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

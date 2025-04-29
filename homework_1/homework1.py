@@ -91,7 +91,6 @@ def plot_projections(data: np.ndarray, clusters: np.ndarray, k: int):
         plt.ylabel(f"Feature {f2}")
         plt.show()
 
-
 def main():
     iris = load_iris()
     iris_data = iris.data
